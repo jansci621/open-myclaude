@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+bun.lock
+package-lock.json
+
+# Build output
+cli.js
+webchat-cli.js
+*.map
+
+# Generated tarballs
+*.tgz
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.svg
+
+# Logs
+*.log
+
+# Development files
+*.memory-card.json
+stubs/
+dev-cli.ts
+webchat-test.cjs
+webchat-standalone.ts
+webchat-prototype*.html
+test-*.json
+
+
+# Example configs
+platforms.example.yaml
+unattended.example.json
+
+# docs
+docs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude config
+.claude/

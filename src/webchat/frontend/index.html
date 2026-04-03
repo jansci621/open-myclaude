@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Code Web Chat</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Claude Code Web Chat</h1>
+      <div id="status">Connecting...</div>
+    </header>
+    <main>
+      <div id="sessions">
+        <button id="new-session-btn">New Session</button>
+        <ul id="session-list"></ul>
+      </div>
+      <div id="chat">
+        <div id="messages"></div>
+        <div id="input-area">
+          <input type="text" id="input" placeholder="Type a message..." disabled>
+          <button id="send-btn" disabled>Send</button>
+        </div>
+      </div>
+    </main>
+    <div id="permission-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Permission Request</h2>
+        <p id="permission-tool"></p>
+        <pre id="permission-input"></pre>
+        <div class="modal-buttons">
+          <button id="approve-btn">Approve</button>
+          <button id="deny-btn">Deny</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

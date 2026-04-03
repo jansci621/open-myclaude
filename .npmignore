@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+bun.lock
+package-lock.json
+
+# Source maps (57MB - not needed for production)
+*.map
+
+# Generated tarballs
+*.tgz
+
+# Development files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pcap
+*.log
+*.memory-card.json
+.DS_Store
+
+# Documentation
+docs/
+
+# Test files
+test-*.json
+webchat-test.cjs
+webchat-test-error.png
+webchat-test-screenshot.png
+
+# Example configs
+platforms.example.yaml
+unattended.example.json
+
+# Claude config
+.claude/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
