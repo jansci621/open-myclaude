@@ -41,7 +41,7 @@ export class WebChatServer {
   private sessionManager: WebChatSessionManager
   private clients = new Map<WebSocket, ClientState>()
   private server: ReturnType<typeof Bun.serve> | null = null
-  private static readonly HTTP_IDLE_TIMEOUT_SECONDS = 300
+  private static readonly HTTP_IDLE_TIMEOUT_SECONDS = 255
 
   constructor(config: WebChatConfig) {
     this.config = config
