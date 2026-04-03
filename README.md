@@ -97,6 +97,118 @@ myclaude --unattended --max-duration 1800000 \
   "Review all changes in current branch"
 ```
 
+### --settings 模型配置
+
+通过 `--settings` 指定模型配置文件，用于自定义 API 端点、模型选择等：
+
+```bash
+# 指定配置文件启动
+myclaude webchat --port 8080 --settings ~/.cc-setting/settings.json
+myclaude wechat webchat --port 8082 --settings ./my-settings.json
+myclaude platforms --config platforms.yaml --settings ./my-settings.json
+```
+
+配置文件示例（`settings.json`）：
+
+```json
+{
+  "apiProvider": "anthropic",
+  "model": "claude-sonnet-4-20250514",
+  "apiKey": "sk-ant-xxx",
+  "apiBaseUrl": "https://api.anthropic.com",
+  "maxTokens": 16384,
+  "temperature": 1.0,
+  "permissionMode": "ask"
+}
+```
+
+### 插件配置
+
+插件通过 MCP（Model Context Protocol）服务器扩展能力，支持工具、资源和提示词模板。
+
+```bash
+# 查看和管理插件
+myclaude plugin list
+myclaude plugin install <plugin-name>
+myclaude plugin remove <plugin-name>
+```
+
+也可在 `settings.json` 中直接配置 MCP 服务器：
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-example"],
+      "env": {
+        "API_KEY": "xxx"
+      }
+    },
+    "local-tool": {
+      "command": "node",
+      "args": ["./my-mcp-server.js"],
+      "cwd": "/path/to/project"
+    }
+  }
+}
+```
+
+MCP 服务器配置字段说明：
+
+| 字段 | 说明 |
+|------|------|
+| `command` | 启动 MCP 服务器的命令 |
+| `args` | 命令参数列表 |
+| `env` | 环境变量 |
+| `cwd` | 工作目录（可选） |
+
+### 插件市场配置
+
+支持从 GitHub 仓库、URL 或 Git 仓库添加插件市场源。
+
+在 `settings.json` 中通过 `extraKnownMarketplaces` 添加第三方市场：
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "my-team-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "my-org/claude-plugins",
+        "ref": "main"
+      }
+    },
+    "private-plugins": {
+      "source": {
+        "source": "url",
+        "url": "https://example.com/plugins/marketplace.json",
+        "headers": {
+          "Authorization": "Bearer xxx"
+        }
+      }
+    },
+    "git-plugins": {
+      "source": {
+        "source": "git",
+        "url": "https://gitlab.com/team/claude-plugins.git",
+        "ref": "v1.0.0"
+      }
+    }
+  }
+}
+```
+
+也可在 `.claude/settings.json`（项目级）中配置，确保团队成员自动获得插件源。
+
+市场源类型说明：
+
+| 类型 | `source` 值 | 必填字段 | 说明 |
+|------|------------|---------|------|
+| GitHub | `"github"` | `repo`（owner/repo） | 可选 `ref` 指定分支/标签，`path` 指定 marketplace.json 路径 |
+| URL | `"url"` | `url` | 直连 marketplace.json 地址，可选 `headers` 用于认证 |
+| Git | `"git"` | `url`（https:// 或 git@） | 可选 `ref` 指定分支/标签，`sha` 指定 commit |
+
 ### 平台配置文件示例
 
 ```yaml
@@ -159,22 +271,6 @@ open-myclaude/
 | 个人微信 | ✅ 官方 iLink Bot API | 高 | 个人/企业 |
 | WebChat | ✅ 内置 | 高 | 通用 |
 
-## 开发
-
-```bash
-# 开发模式运行
-bun run start
-
-# WebChat 开发
-bun run webchat
-
-# 个人微信开发
-bun run wechat
-
-# 多平台开发
-bun run platforms
-```
-
 ## License
 
-MIT
+GPL
