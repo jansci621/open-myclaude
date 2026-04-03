@@ -249,7 +249,6 @@ class WebChatClient {
     this.pluginFacets = { quickFilters: [], sources: [], marketplaces: [], categories: [], roles: [], techStack: [], businessDomains: [] }
     this.pluginFilters = { search: '', filter: 'all', source: 'all', category: 'all', role: 'all', techStack: 'all', businessDomain: 'all' }
     this.pluginPagination = { page: 1, pageSize: 50, total: 0, totalPages: 1 }
-    this.pluginVirtualState = { rowHeight: 320, overscan: 2, lastRangeKey: '' }
     this.pluginsLoaded = false
     this.pluginsPrefetched = false
     this.pluginWarmupOfficialPayload = null
@@ -394,9 +393,6 @@ class WebChatClient {
       } else {
         const pluginsPayload = await this.fetchPluginsPayload()
         this.applyPluginsPayload(pluginsPayload)
-        if (!silent) {
-          this.setPluginsStatus('', false)
-        }
       }
       void this.loadInstalledPlugins()
     } catch (error) {
@@ -406,6 +402,9 @@ class WebChatClient {
       }
     } finally {
       this.loadingPlugins = false
+      if (!silent) {
+        this.setPluginsStatus('', false)
+      }
     }
   }
 
@@ -417,7 +416,9 @@ class WebChatClient {
     this.setPluginsStatus('Loading community marketplace in background...', false)
 
     const fullPayload = this.pluginWarmupFullPayload || await (this.pluginWarmupFullPromise || this.fetchPluginsPayload())
-    this.applyPluginsPayload(fullPayload)
+    // Merge instead of replace to avoid flicker — append new community entries
+    // while keeping already-rendered official entries in place.
+    this.applyPluginsPayloadMerged(fullPayload)
     this.pluginWarmupOfficialPayload = null
     this.pluginWarmupFullPayload = null
     this.pluginWarmupFullPromise = null
@@ -439,10 +440,13 @@ class WebChatClient {
     })
 
     const query = params.toString()
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15000)
     const [pluginsResp, facetsResp] = await Promise.all([
-      fetch('/api/plugins?' + query),
-      fetch('/api/plugins/facets?' + query),
+      fetch('/api/plugins?' + query, { signal: controller.signal }),
+      fetch('/api/plugins/facets?' + query, { signal: controller.signal }),
     ])
+    clearTimeout(timeout)
 
     const [pluginsData, facetsData] = await Promise.all([
       pluginsResp.json(),
@@ -461,7 +465,7 @@ class WebChatClient {
 
   applyPluginsPayload(payload, options = {}) {
     this.plugins = payload.pluginsData.data || []
-    const nextFacets = payload.facetsData.data || { quickFilters: [], sources: [], marketplaces: [], categories: [], roles: [], techStack: [], businessDomains: [] }
+    const nextFacets = payload.facetsData?.data || { quickFilters: [], sources: [], marketplaces: [], categories: [], roles: [], techStack: [], businessDomains: [] }
     if (options.preserveSourceFacet) {
       this.pluginFacets = {
         ...nextFacets,
@@ -470,6 +474,34 @@ class WebChatClient {
     } else {
       this.pluginFacets = nextFacets
     }
+    this.pluginPagination = {
+      page: payload.pluginsData.pagination?.page || 1,
+      pageSize: payload.pluginsData.pagination?.pageSize || this.pluginPagination.pageSize || 50,
+      total: payload.pluginsData.pagination?.total || this.plugins.length,
+      totalPages: payload.pluginsData.pagination?.totalPages || 1,
+    }
+    this.pluginsLoaded = true
+    this.renderPluginFilters()
+    this.renderPlugins()
+    this.syncUrlState()
+  }
+
+  applyPluginsPayloadMerged(payload) {
+    const incomingPlugins = payload.pluginsData.data || []
+    const existingIds = new Set(this.plugins.map(p => p.id))
+    const newPlugins = incomingPlugins.filter(p => !existingIds.has(p.id))
+    // Only re-render if there are actually new plugins to add
+    if (newPlugins.length === 0) {
+      // Still update facets and pagination
+      const nextFacets = payload.facetsData?.data || this.pluginFacets
+      this.pluginFacets = nextFacets
+      this.renderPluginFilters()
+      return
+    }
+    // Append new entries instead of replacing to avoid DOM flicker
+    this.plugins = [...this.plugins, ...newPlugins]
+    const nextFacets = payload.facetsData?.data || this.pluginFacets
+    this.pluginFacets = nextFacets
     this.pluginPagination = {
       page: payload.pluginsData.pagination?.page || 1,
       pageSize: payload.pluginsData.pagination?.pageSize || this.pluginPagination.pageSize || 50,
@@ -604,14 +636,7 @@ class WebChatClient {
       return
     }
 
-    const { startIndex, endIndex, topSpacerHeight, bottomSpacerHeight } = this.computeVirtualWindow(grid, plugins.length)
-    const visiblePlugins = plugins.slice(startIndex, endIndex)
-    const topSpacer = topSpacerHeight > 0 ? \`<div class="plugin-grid-spacer" style="height:\${topSpacerHeight}px"></div>\` : ''
-    const bottomSpacer = bottomSpacerHeight > 0 ? \`<div class="plugin-grid-spacer" style="height:\${bottomSpacerHeight}px"></div>\` : ''
-
-    grid.innerHTML = [
-      topSpacer,
-      ...visiblePlugins.map(plugin => {
+    grid.innerHTML = plugins.map(plugin => {
       const installed = this.installedPlugins.get(plugin.id) || plugin
       const isInstalled = !!installed.installed
       const isEnabled = !!installed.enabled
@@ -655,34 +680,9 @@ class WebChatClient {
           </div>
         </article>
       \`
-    }),
-      bottomSpacer,
-    ].join('')
+    }).join('')
 
     this.renderPagination()
-  }
-
-  computeVirtualWindow(grid, totalItems) {
-    const minCardWidth = 280
-    const gridGap = 16
-    const width = grid.clientWidth || grid.offsetWidth || 0
-    const columns = Math.max(1, Math.floor((width + gridGap) / (minCardWidth + gridGap)))
-    const rowHeight = this.pluginVirtualState.rowHeight
-    const overscan = this.pluginVirtualState.overscan
-    const totalRows = Math.max(1, Math.ceil(totalItems / columns))
-    const viewportHeight = grid.clientHeight || 720
-    const scrollTop = grid.scrollTop || 0
-    const startRow = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan)
-    const endRow = Math.min(totalRows, Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan)
-    const startIndex = startRow * columns
-    const endIndex = Math.min(totalItems, endRow * columns)
-
-    return {
-      startIndex,
-      endIndex,
-      topSpacerHeight: startRow * rowHeight,
-      bottomSpacerHeight: Math.max(0, (totalRows - endRow) * rowHeight),
-    }
   }
 
   buildPluginsSummary(plugins) {
@@ -1526,18 +1526,6 @@ class WebChatClient {
       this.handlePluginAction(button.dataset.action, button.dataset.pluginId)
     })
 
-    document.getElementById('plugins-grid').addEventListener('scroll', () => {
-      if (this.currentView === 'plugins') {
-        window.requestAnimationFrame(() => this.renderPlugins())
-      }
-    }, { passive: true })
-
-    window.addEventListener('resize', () => {
-      if (this.currentView === 'plugins') {
-        window.requestAnimationFrame(() => this.renderPlugins())
-      }
-    })
-
     window.addEventListener('popstate', () => {
       this.restoreStateFromUrl()
       document.getElementById('plugin-search').value = this.pluginFilters.search || ''
@@ -1753,6 +1741,8 @@ main { flex: 1; display: flex; overflow: hidden; }
 #plugins-view {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
   background: linear-gradient(180deg, rgba(99, 102, 241, 0.06), transparent 18%), var(--bg-primary);
   overflow: hidden;
 }
@@ -1761,6 +1751,7 @@ main { flex: 1; display: flex; overflow: hidden; }
   display: flex;
   flex-direction: column;
   height: 100%;
+  width: 100%;
   padding: 1.25rem;
   gap: 1rem;
 }
@@ -1801,7 +1792,7 @@ main { flex: 1; display: flex; overflow: hidden; }
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 260px 1fr;
   gap: 1rem;
 }
 
@@ -1847,9 +1838,11 @@ main { flex: 1; display: flex; overflow: hidden; }
 .plugins-content {
   min-width: 0;
   min-height: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 0.875rem;
+  flex: 1;
 }
 
 .plugin-active-filters {
@@ -1953,11 +1946,8 @@ main { flex: 1; display: flex; overflow: hidden; }
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 1rem;
   align-content: start;
-}
-
-.plugin-grid-spacer {
-  grid-column: 1 / -1;
-  pointer-events: none;
+  width: 100%;
+  min-width: 0;
 }
 
 .plugin-card {
@@ -2266,7 +2256,7 @@ main { flex: 1; display: flex; overflow: hidden; }
 .btn-primary:disabled,
 .btn-danger:disabled {
   opacity: 0.55;
-  cursor: wait;
+  cursor: not-allowed;
 }
 #messages { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
 

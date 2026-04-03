@@ -8,12 +8,46 @@
  */
 
 const CLAWHUB_MARKETPLACE_NAME = 'clawhub-community'
-const CLAWHUB_SITE_URL = 'https://clawhub.ai'
+const CLAWHUB_MIRROR_SITE_URL = 'https://cn.clawhub-mirror.com'
+const CLAWHUB_OFFICIAL_SITE_URL = 'https://clawhub.ai'
+const CLAWHUB_MIRROR_API_URL = 'https://skills.volces.com/api/v1'
 const CLAWHUB_CONVEX_URL = 'https://wry-manatee-359.convex.cloud'
+
+let resolvedSiteUrl: string | undefined
+
+async function detectSiteUrl(): Promise<string> {
+  if (resolvedSiteUrl) return resolvedSiteUrl
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 3000)
+    const resp = await fetch('https://ipinfo.io/json', { signal: controller.signal })
+    clearTimeout(timeout)
+    if (resp.ok) {
+      const data = await resp.json() as { country?: string }
+      const country = (data.country || '').toUpperCase()
+      if (country === 'CN') {
+        resolvedSiteUrl = CLAWHUB_MIRROR_SITE_URL
+        logClawHubCache(`geo detected CN → mirror site`)
+        return resolvedSiteUrl
+      }
+      logClawHubCache(`geo detected ${country || 'unknown'} → official site`)
+    }
+  } catch {
+    logClawHubCache('geo detection failed → default official site')
+  }
+  resolvedSiteUrl = CLAWHUB_OFFICIAL_SITE_URL
+  return resolvedSiteUrl
+}
+
+function getSiteUrl(): string {
+  return resolvedSiteUrl || CLAWHUB_OFFICIAL_SITE_URL
+}
 const CLAWHUB_PAGE_SIZE = 50
 const CLAWHUB_INITIAL_ITEMS = 50
 const CLAWHUB_MAX_ITEMS = 600
 const CACHE_TTL_MS = 5 * 60 * 1000
+
+// --- Convex API types ---
 
 type ClawHubStats = {
   downloads?: number
@@ -72,6 +106,29 @@ type ClawHubSkillDetail = {
   }
 }
 
+// --- Mirror API types ---
+
+type MirrorSearchResult = {
+  slug: string
+  displayName: string
+  summary: string
+  version: string
+  score: number
+  updatedAt: number
+  metaContent: {
+    Keywords?: string[]
+    displayName?: string
+    latest?: { commit: string; publishedAt: number; version: string }
+    owner?: string
+  }
+  owner: string
+}
+
+type MirrorSearchResponse = {
+  results: MirrorSearchResult[]
+  nextMarker?: string
+}
+
 type CommunityMarketplaceEntry = {
   id: string
   name: string
@@ -102,6 +159,7 @@ let cache:
       entries: CommunityMarketplaceEntry[]
       hydrated: boolean
       nextCursor?: string | null
+      source: 'mirror' | 'convex'
     }
   | undefined
 
@@ -116,15 +174,39 @@ function logClawHubCache(message: string): void {
   console.log(`[ClawHubCache] ${message}`)
 }
 
-async function clawHubQuery<T>(path: string, args: Record<string, unknown>): Promise<T> {
+// --- Mirror API query ---
+
+async function mirrorSearch(limit: number, marker?: string): Promise<MirrorSearchResponse> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (marker) params.set('marker', marker)
+  const response = await fetch(`${CLAWHUB_MIRROR_API_URL}/search?${params}`, {
+    method: 'GET',
+    headers: { 'Accept': 'application/json' },
+  })
+  if (!response.ok) {
+    throw new Error(`Mirror search failed with HTTP ${response.status}`)
+  }
+  return response.json() as Promise<MirrorSearchResponse>
+}
+
+async function mirrorGetSkill(slug: string): Promise<MirrorSearchResult> {
+  const response = await fetch(`${CLAWHUB_MIRROR_API_URL}/skills/${encodeURIComponent(slug)}`, {
+    method: 'GET',
+    headers: { 'Accept': 'application/json' },
+  })
+  if (!response.ok) {
+    throw new Error(`Mirror skill detail failed with HTTP ${response.status}`)
+  }
+  return response.json() as Promise<MirrorSearchResult>
+}
+
+// --- Convex API query ---
+
+async function convexQuery<T>(path: string, args: Record<string, unknown>): Promise<T> {
   const response = await fetch(`${CLAWHUB_CONVEX_URL}/api/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      path,
-      args,
-      format: 'json',
-    }),
+    body: JSON.stringify({ path, args, format: 'json' }),
   })
 
   if (!response.ok) {
@@ -144,7 +226,7 @@ async function clawHubQuery<T>(path: string, args: Record<string, unknown>): Pro
   return payload.value
 }
 
-function categorizeSkill(record: ClawHubSkillRecord): {
+function categorizeFromText(slug: string, summary: string): {
   categories: string[]
   techStack: string[]
   businessDomains: string[]
@@ -152,9 +234,7 @@ function categorizeSkill(record: ClawHubSkillRecord): {
   tags: string[]
   icon: string
 } {
-  const slug = record.skill.slug.toLowerCase()
-  const summary = (record.skill.summary || '').toLowerCase()
-  const haystack = `${slug} ${summary}`
+  const haystack = `${slug} ${summary}`.toLowerCase()
   const tags = new Set<string>(['community', 'skill'])
   const categories: string[] = ['agent']
   const techStack: string[] = []
@@ -243,10 +323,10 @@ function categorizeSkill(record: ClawHubSkillRecord): {
 }
 
 function toEntry(record: ClawHubSkillRecord): CommunityMarketplaceEntry {
-  const mapped = categorizeSkill(record)
   const slug = record.skill.slug
   const owner = record.owner?.handle || record.ownerHandle || record.owner?.displayName || 'community'
   const displayName = record.skill.displayName || slug
+  const mapped = categorizeFromText(slug, record.skill.summary || '')
   const tags = new Set(mapped.tags)
   if (record.skill.badges?.official) tags.add('official')
   if (record.skill.badges?.highlighted) tags.add('highlighted')
@@ -272,7 +352,38 @@ function toEntry(record: ClawHubSkillRecord): CommunityMarketplaceEntry {
     new: false,
     marketplace: CLAWHUB_MARKETPLACE_NAME,
     installable: false,
-    externalUrl: `${CLAWHUB_SITE_URL}/${encodeURIComponent(owner)}/${encodeURIComponent(slug)}`,
+    externalUrl: `${getSiteUrl()}/${encodeURIComponent(owner)}/${encodeURIComponent(slug)}`,
+    sourceType: 'community',
+  }
+}
+
+function mirrorResultToEntry(result: MirrorSearchResult): CommunityMarketplaceEntry {
+  const slug = result.slug
+  const owner = result.owner || result.metaContent?.owner || 'community'
+  const displayName = result.displayName || result.metaContent?.displayName || slug
+  const mapped = categorizeFromText(slug, result.summary || '')
+
+  return {
+    id: `${slug}@${CLAWHUB_MARKETPLACE_NAME}`,
+    name: displayName,
+    icon: mapped.icon,
+    description: result.summary || 'ClawHub community skill',
+    categories: mapped.categories,
+    techStack: mapped.techStack,
+    businessDomains: mapped.businessDomains,
+    role: mapped.role,
+    tags: mapped.tags,
+    version: result.version || result.metaContent?.latest?.version || 'latest',
+    author: owner,
+    downloads: 0,
+    rating: 4.2,
+    installed: false,
+    enabled: false,
+    hot: false,
+    new: false,
+    marketplace: CLAWHUB_MARKETPLACE_NAME,
+    installable: false,
+    externalUrl: `${getSiteUrl()}/${encodeURIComponent(owner)}/${encodeURIComponent(slug)}`,
     sourceType: 'community',
   }
 }
@@ -304,6 +415,33 @@ function mergeDetail(base: CommunityMarketplaceEntry, detail: ClawHubSkillDetail
   }
 }
 
+async function listFromMirror(): Promise<{ entries: CommunityMarketplaceEntry[]; nextCursor?: string; hydrated: boolean }> {
+  const firstPage = await mirrorSearch(CLAWHUB_INITIAL_ITEMS)
+  const entries = firstPage.results.map(mirrorResultToEntry)
+  return {
+    entries,
+    nextCursor: firstPage.nextMarker,
+    hydrated: !firstPage.nextMarker || entries.length >= CLAWHUB_MAX_ITEMS,
+  }
+}
+
+async function listFromConvex(): Promise<{ entries: CommunityMarketplaceEntry[]; nextCursor?: string | null; hydrated: boolean }> {
+  const firstPage = await convexQuery<ClawHubListResponse>('skills:listPublicPageV4', {
+    cursor: undefined,
+    numItems: CLAWHUB_INITIAL_ITEMS,
+    sort: 'downloads',
+    dir: 'desc',
+    highlightedOnly: false,
+    nonSuspiciousOnly: true,
+  })
+  const entries = firstPage.page.map(toEntry)
+  return {
+    entries,
+    nextCursor: firstPage.nextCursor ?? undefined,
+    hydrated: !firstPage.hasMore || !firstPage.nextCursor || entries.length >= CLAWHUB_MAX_ITEMS,
+  }
+}
+
 export async function listClawHubMarketplaceEntries(): Promise<CommunityMarketplaceEntry[]> {
   if (cache && cache.expiresAt > Date.now()) {
     logClawHubCache(`hit list ttl_ms=${cache.expiresAt - Date.now()} items=${cache.entries.length} hydrated=${cache.hydrated}`)
@@ -319,30 +457,52 @@ export async function listClawHubMarketplaceEntries(): Promise<CommunityMarketpl
     logClawHubCache('miss list')
   }
 
-  const firstPage = await clawHubQuery<ClawHubListResponse>('skills:listPublicPageV4', {
-    cursor: undefined,
-    numItems: CLAWHUB_INITIAL_ITEMS,
-    sort: 'downloads',
-    dir: 'desc',
-    highlightedOnly: false,
-    nonSuspiciousOnly: true,
-  })
+  // Detect geo to decide primary source (mirror for CN, convex otherwise)
+  const siteUrl = await detectSiteUrl()
+  const isCN = siteUrl === CLAWHUB_MIRROR_SITE_URL
 
-  const entries = firstPage.page.map(toEntry)
+  let result: { entries: CommunityMarketplaceEntry[]; nextCursor?: string | null; hydrated: boolean }
+  let source: 'mirror' | 'convex'
+
+  if (isCN) {
+    // CN: try mirror first, fall back to Convex
+    try {
+      result = await listFromMirror()
+      source = 'mirror'
+      logClawHubCache(`mirror list ok items=${result.entries.length}`)
+    } catch (mirrorError) {
+      logClawHubCache(`mirror list failed: ${mirrorError instanceof Error ? mirrorError.message : String(mirrorError)}, falling back to convex`)
+      result = await listFromConvex()
+      source = 'convex'
+    }
+  } else {
+    // Non-CN: try Convex first, fall back to mirror
+    try {
+      result = await listFromConvex()
+      source = 'convex'
+      logClawHubCache(`convex list ok items=${result.entries.length}`)
+    } catch (convexError) {
+      logClawHubCache(`convex list failed: ${convexError instanceof Error ? convexError.message : String(convexError)}, falling back to mirror`)
+      result = await listFromMirror()
+      source = 'mirror'
+    }
+  }
 
   cache = {
     expiresAt: Date.now() + CACHE_TTL_MS,
-    entries,
-    hydrated: !firstPage.hasMore || !firstPage.nextCursor || entries.length >= CLAWHUB_MAX_ITEMS,
-    nextCursor: firstPage.nextCursor,
+    entries: result.entries,
+    hydrated: result.hydrated,
+    nextCursor: result.nextCursor,
+    source,
   }
-  logClawHubCache(`store list ttl_ms=${CACHE_TTL_MS} items=${entries.length} hydrated=${cache.hydrated}`)
+
+  logClawHubCache(`store list ttl_ms=${CACHE_TTL_MS} items=${cache.entries.length} hydrated=${cache.hydrated} source=${source}`)
 
   if (!cache.hydrated) {
     void ensureBackgroundHydration()
   }
 
-  return entries
+  return cache.entries
 }
 
 export function isClawHubPluginId(pluginId: string): boolean {
@@ -390,17 +550,30 @@ async function getClawHubMarketplaceEntryFromBase(
 
   const slug = pluginId.replace(`@${CLAWHUB_MARKETPLACE_NAME}`, '')
   try {
-    const detail = await clawHubQuery<ClawHubSkillDetail>('skills:getBySlug', { slug })
-    const merged = mergeDetail(base, detail)
+    // Try mirror first
+    const mirrorDetail = await mirrorGetSkill(slug)
+    const merged = mirrorResultToEntry(mirrorDetail)
     detailCache.set(pluginId, {
       expiresAt: Date.now() + CACHE_TTL_MS,
       entry: merged,
     })
-    logClawHubCache(`store detail plugin=${pluginId} ttl_ms=${CACHE_TTL_MS}`)
+    logClawHubCache(`store detail plugin=${pluginId} ttl_ms=${CACHE_TTL_MS} (mirror)`)
     return merged
   } catch {
-    logClawHubCache(`fallback base plugin=${pluginId}`)
-    return base
+    // Fallback to Convex
+    try {
+      const detail = await convexQuery<ClawHubSkillDetail>('skills:getBySlug', { slug })
+      const merged = mergeDetail(base, detail)
+      detailCache.set(pluginId, {
+        expiresAt: Date.now() + CACHE_TTL_MS,
+        entry: merged,
+      })
+      logClawHubCache(`store detail plugin=${pluginId} ttl_ms=${CACHE_TTL_MS} (convex)`)
+      return merged
+    } catch {
+      logClawHubCache(`fallback base plugin=${pluginId}`)
+      return base
+    }
   }
 }
 
@@ -443,28 +616,39 @@ async function hydrateClawHubCache(): Promise<void> {
     return
   }
 
-  logClawHubCache(`background hydrate start items=${cache.entries.length}`)
+  logClawHubCache(`background hydrate start items=${cache.entries.length} source=${cache.source}`)
   let cursor = cache.nextCursor ?? undefined
   const entries = [...cache.entries]
 
   while (entries.length < CLAWHUB_MAX_ITEMS && cursor) {
-    const page = await clawHubQuery<ClawHubListResponse>('skills:listPublicPageV4', {
-      cursor,
-      numItems: Math.min(CLAWHUB_PAGE_SIZE, CLAWHUB_MAX_ITEMS - entries.length),
-      sort: 'downloads',
-      dir: 'desc',
-      highlightedOnly: false,
-      nonSuspiciousOnly: true,
-    })
-
-    entries.push(...page.page.map(toEntry))
-    cursor = page.hasMore ? (page.nextCursor ?? undefined) : undefined
+    try {
+      if (cache.source === 'mirror') {
+        const page = await mirrorSearch(Math.min(CLAWHUB_PAGE_SIZE, CLAWHUB_MAX_ITEMS - entries.length), cursor)
+        entries.push(...page.results.map(mirrorResultToEntry))
+        cursor = page.nextMarker
+      } else {
+        const page = await convexQuery<ClawHubListResponse>('skills:listPublicPageV4', {
+          cursor,
+          numItems: Math.min(CLAWHUB_PAGE_SIZE, CLAWHUB_MAX_ITEMS - entries.length),
+          sort: 'downloads',
+          dir: 'desc',
+          highlightedOnly: false,
+          nonSuspiciousOnly: true,
+        })
+        entries.push(...page.page.map(toEntry))
+        cursor = page.hasMore ? (page.nextCursor ?? undefined) : undefined
+      }
+    } catch (error) {
+      logClawHubCache(`hydrate page failed: ${error instanceof Error ? error.message : String(error)}`)
+      break
+    }
 
     cache = {
       expiresAt: Date.now() + CACHE_TTL_MS,
       entries,
       hydrated: !cursor || entries.length >= CLAWHUB_MAX_ITEMS,
       nextCursor: cursor,
+      source: cache.source,
     }
     logClawHubCache(`background hydrate batch items=${entries.length} hydrated=${cache.hydrated}`)
 
