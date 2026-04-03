@@ -6,7 +6,6 @@
 
 ## 特性
 
-- **终端 CLI** — 原生 Claude Code 体验，支持所有工具和命令
 - **WebChat** — 浏览器访问的 Web 聊天界面，支持流式输出、多会话管理
 - **多平台对接** — 飞书、企业微信、个人微信，将 AI 助手接入即时通讯
 - **插件系统** — 内置插件市场，支持 MCP 服务器和自定义技能扩展
@@ -70,7 +69,6 @@ myclaude wecom --app-id wwxxx --app-secret xxx
 # 个人微信（扫码登录）
 myclaude wechat --workspace ~/my-project
 
-# 个人微信
 
 # 多平台同时启动（推荐）
 myclaude platforms --config platforms.yaml
@@ -78,7 +76,7 @@ myclaude platforms --config platforms.yaml
 # WebChat + 个人微信 + 飞书（全功能）
 myclaude platforms \
   --webchat --port 8080 \
-  --wechat-personal --wechat-workspace ~/my-project \
+  --wechat --wechat-workspace ~/my-project \
   --feishu-app-id cli_xxx --feishu-app-secret xxx
 ```
 
